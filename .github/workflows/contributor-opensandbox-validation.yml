@@ -29,7 +29,7 @@ jobs:
       - name: Install the exact locked optional SDK without replacing locked dependencies
         run: |
           printf '%s\n' 'opensandbox==0.1.15 --hash=sha256:992b01490551f4d8e3f99caa25e34cb9d1690f0c5027eeebab912738291957d1' > /tmp/opensandbox-locked.txt
-          uv pip install --python .venv/bin/python --no-deps --require-hashes -r /tmp/opensandbox-locked.txt
+          uv --no-config pip install --python .venv/bin/python --no-deps --require-hashes -r /tmp/opensandbox-locked.txt
           .venv/bin/python -c 'from opensandbox.sync import SandboxSync, SandboxManagerSync'
       - name: Run offline lifecycle and real SDK HTTP regressions
         env:
