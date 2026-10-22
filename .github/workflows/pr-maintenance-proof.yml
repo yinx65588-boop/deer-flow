@@ -1,0 +1,76 @@
+name: PR6958 exact-head integration validation
+on:
+  push:
+    branches: [proof/deer6958-final-20261023]
+permissions:
+  contents: read
+env:
+  SOURCE_HEAD: f91dd749269913f7b468581779cec0f17fc9763f
+jobs:
+  backend:
+    if: github.repository == 'yinx65588-boop/deer-flow'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ['1']
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: deerflow
+          POSTGRES_PASSWORD: deerflow
+          POSTGRES_DB: deerflow_test
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      TEST_POSTGRES_URI: postgresql://deerflow:deerflow@localhost:5432/deerflow_test?sslmode=disable
+      DEDUPE_TEST_POSTGRES_URL: postgresql://deerflow:deerflow@localhost:5432/deerflow_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.SOURCE_HEAD }}
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.11.1'
+      - working-directory: backend
+        run: uv sync --locked --group dev --extra postgres
+      - name: Verify source and check guidance
+        if: matrix.group == '1'
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          git diff --check 66508d7522015ab6582105130da691e2803eba0d HEAD
+          python scripts/check_agent_guidance.py --base-ref 66508d7522015ab6582105130da691e2803eba0d --head-ref "$SOURCE_HEAD"
+      - name: Lint backend
+        if: matrix.group == '1'
+        working-directory: backend
+        run: make lint
+      - name: Run backend offline shard
+        if: matrix.group != 'blocking'
+        working-directory: backend
+        env:
+          GROUP: ${{ matrix.group }}
+        run: |
+          set -o pipefail
+          make test-shard SPLITS=4 GROUP="$GROUP" 2>&1 | tee backend-validation.log
+      - name: Run blocking IO suite
+        if: matrix.group == 'blocking'
+        working-directory: backend
+        run: |
+          set -o pipefail
+          make test-blocking-io 2>&1 | tee backend-validation.log
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: deer6958-backend-${{ matrix.group }}
+          path: backend/backend-validation.log
