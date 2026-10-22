@@ -1,0 +1,150 @@
+name: PR6958 exact-head integration validation
+on:
+  push:
+    branches: [proof/deer6958-integration-20261023]
+permissions:
+  contents: read
+env:
+  SOURCE_HEAD: a4e95e3f9aedd7a6cc2c5b84801f0ee1b04c2e09
+jobs:
+  backend:
+    if: github.repository == 'yinx65588-boop/deer-flow'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ['1', '2', '3', '4', blocking]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: deerflow
+          POSTGRES_PASSWORD: deerflow
+          POSTGRES_DB: deerflow_test
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: --health-cmd 'redis-cli ping' --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      TEST_POSTGRES_URI: postgresql://deerflow:deerflow@localhost:5432/deerflow_test?sslmode=disable
+      DEDUPE_TEST_POSTGRES_URL: postgresql://deerflow:deerflow@localhost:5432/deerflow_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.SOURCE_HEAD }}
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.11.1'
+      - working-directory: backend
+        run: uv sync --locked --group dev --extra postgres
+      - name: Verify source and check guidance
+        if: matrix.group == '1'
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          git diff --check 66508d7522015ab6582105130da691e2803eba0d HEAD
+          python scripts/check_agent_guidance.py --base-ref 66508d7522015ab6582105130da691e2803eba0d --head-ref "$SOURCE_HEAD"
+      - name: Lint backend
+        if: matrix.group == '1'
+        working-directory: backend
+        run: make lint
+      - name: Run backend offline shard
+        if: matrix.group != 'blocking'
+        working-directory: backend
+        env:
+          GROUP: ${{ matrix.group }}
+        run: |
+          set -o pipefail
+          make test-shard SPLITS=4 GROUP="$GROUP" 2>&1 | tee backend-validation.log
+      - name: Run blocking IO suite
+        if: matrix.group == 'blocking'
+        working-directory: backend
+        run: |
+          set -o pipefail
+          make test-blocking-io 2>&1 | tee backend-validation.log
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: deer6958-backend-${{ matrix.group }}
+          path: backend/backend-validation.log
+  frontend:
+    if: github.repository == 'yinx65588-boop/deer-flow'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.SOURCE_HEAD }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - run: corepack enable && corepack prepare pnpm@10.26.2 --activate
+      - working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - working-directory: frontend
+        run: pnpm format && pnpm check
+      - working-directory: frontend
+        run: |
+          set -o pipefail
+          make test 2>&1 | tee unit-validation.log
+      - working-directory: frontend
+        env:
+          BETTER_AUTH_SECRET: local-dev-secret
+        run: pnpm build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: deer6958-frontend-unit
+          path: frontend/unit-validation.log
+  browser:
+    if: github.repository == 'yinx65588-boop/deer-flow'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.SOURCE_HEAD }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.11.1'
+      - working-directory: backend
+        run: uv sync --locked
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - run: corepack enable && corepack prepare pnpm@10.26.2 --activate
+      - working-directory: frontend
+        run: pnpm install --frozen-lockfile && pnpm exec playwright install chromium --with-deps
+      - working-directory: frontend
+        env:
+          SHARD: ${{ matrix.shard }}
+          SKIP_ENV_VALIDATION: '1'
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/e2e
+        run: pnpm exec playwright test --shard="$SHARD/4" --workers=1 --reporter=github,html --output=test-results/e2e
+      - working-directory: frontend
+        if: ${{ !cancelled() && matrix.shard == 1 }}
+        env:
+          SKIP_ENV_VALIDATION: '1'
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/auth
+        run: pnpm exec playwright test -c playwright.auth.config.ts --reporter=github,html --output=test-results/auth
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: deer6958-browser-${{ matrix.shard }}
+          path: frontend/playwright-report/
