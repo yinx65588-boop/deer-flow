@@ -1,0 +1,30 @@
+name: PR6958 final guidance regression
+on:
+  push:
+    branches: [proof/deer6958-guidance-regression-20261023]
+permissions:
+  contents: read
+jobs:
+  guidance:
+    if: github.repository == 'yinx65588-boop/deer-flow'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: f91dd749269913f7b468581779cec0f17fc9763f
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.11.1'
+      - working-directory: backend
+        run: uv sync --locked --group dev
+      - name: Verify exact source and rerun the failing guidance owner suite
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = f91dd749269913f7b468581779cec0f17fc9763f
+          uv run --locked pytest tests/test_agent_guidance_check.py -q
