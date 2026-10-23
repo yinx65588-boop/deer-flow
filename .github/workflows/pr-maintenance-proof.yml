@@ -1,7 +1,5 @@
 name: Tenki review follow-up regression proof
 on:
-  push:
-    branches: [proof/tenki-review-followup-20261023]
   workflow_dispatch:
 permissions:
   contents: read
@@ -53,7 +51,7 @@ jobs:
           git apply /tmp/review-repair.patch
       - name: Tenki and shared lifecycle owners
         working-directory: backend
-        run: uv run --locked pytest tests/test_tenki_lifecycle.py tests/test_tenki_provider.py tests/test_warm_pool_lifecycle.py tests/test_sandbox_acquire_serialization.py -q
+        run: uv run --locked pytest tests/test_tenki_lifecycle.py tests/test_tenki_provider.py tests/test_warm_pool_lifecycle.py tests/test_acquire_serialization.py -q
       - name: Strict blocking I/O
         working-directory: backend
         run: make test-blocking-io
